@@ -1,4 +1,4 @@
 # Ignore password files
-src/ssid.h
+src/iot-minisplit/ssid.h
 
 .DS_Store
