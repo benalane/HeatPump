@@ -5,16 +5,25 @@
 
 #include <ESP8266WebServer.h>
 
+#include "HeatPump.h"
+
 #include "ssid.h"
 
 const char* ssid = STASSID;
 const char* password = STAPSK;
 
 ESP8266WebServer server(80);
+HeatPump hp;
+
+float current_temp;
 
 void handleRoot() {
   digitalWrite(LED_BUILTIN, 1);
-  server.send(200, "text/plain", "hello from esp8266!\r\n");
+  String message = "hello from esp8266!\r\n";
+  message += "Current temp: ";
+  message += current_temp;
+  message += "\r\n";
+  server.send(200, "text/plain", message);
   digitalWrite(LED_BUILTIN, 0);
 }
 
@@ -36,15 +45,30 @@ void handleNotFound() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("Booting");
+
+  pinMode(LED_BUILTIN, OUTPUT);     // Initialize the LED_BUILTIN pin as an output
+  
+  // Serial.begin(115200);
+  // Serial.println("Booting");
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("Connection Failed! Rebooting...");
+    // Serial.println("Connection Failed! Rebooting...");
     delay(5000);
     ESP.restart();
   }
+
+  hp.connect(&Serial);
+  heatpumpSettings mySettings = {
+    "ON",  /* ON/OFF */
+    "FAN", /* HEAT/COOL/FAN/DRY/AUTO */
+    26,    /* Between 16 and 31 */
+    "4",   /* Fan speed: 1-4, AUTO, or QUIET */
+    "3",   /* Air direction (vertical): 1-5, SWING, or AUTO */
+    "|"    /* Air direction (horizontal): <<, <, |, >, >>, <>, or SWING */
+  };
+  hp.setSettings(mySettings);
+  hp.update();
 
   // Port defaults to 8266
   // ArduinoOTA.setPort(8266);
@@ -68,36 +92,36 @@ void setup() {
     }
 
     // NOTE: if updating FS this would be the place to unmount FS using FS.end()
-    Serial.println("Start updating " + type);
+    // Serial.println("Start updating " + type);
   });
   ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
+    // Serial.println("\nEnd");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    // Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
+    // Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) {
-      Serial.println("Auth Failed");
+      // Serial.println("Auth Failed");
     } else if (error == OTA_BEGIN_ERROR) {
-      Serial.println("Begin Failed");
+      // Serial.println("Begin Failed");
     } else if (error == OTA_CONNECT_ERROR) {
-      Serial.println("Connect Failed");
+      // Serial.println("Connect Failed");
     } else if (error == OTA_RECEIVE_ERROR) {
-      Serial.println("Receive Failed");
+      // Serial.println("Receive Failed");
     } else if (error == OTA_END_ERROR) {
-      Serial.println("End Failed");
+      // Serial.println("End Failed");
     }
   });
   ArduinoOTA.begin();
-  Serial.println("Ready");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  // Serial.println("Ready");
+  // Serial.print("IP address: ");
+  // Serial.println(WiFi.localIP());
 
 
   if (MDNS.begin("esp8266")) {
-    Serial.println("MDNS responder started");
+    // Serial.println("MDNS responder started");
   }
 
   server.on("/", handleRoot);
@@ -125,66 +149,6 @@ void setup() {
 
   server.onNotFound(handleNotFound);
 
-  /////////////////////////////////////////////////////////
-  // Hook examples
-
-  server.addHook([](const String & method, const String & url, WiFiClient * client, ESP8266WebServer::ContentTypeFunction contentType) {
-    (void)method;      // GET, PUT, ...
-    (void)url;         // example: /root/myfile.html
-    (void)client;      // the webserver tcp client connection
-    (void)contentType; // contentType(".html") => "text/html"
-    Serial.printf("A useless web hook has passed\n");
-    Serial.printf("(this hook is in 0x%08x area (401x=IRAM 402x=FLASH))\n", esp_get_program_counter());
-    return ESP8266WebServer::CLIENT_REQUEST_CAN_CONTINUE;
-  });
-
-  server.addHook([](const String&, const String & url, WiFiClient*, ESP8266WebServer::ContentTypeFunction) {
-    if (url.startsWith("/fail")) {
-      Serial.printf("An always failing web hook has been triggered\n");
-      return ESP8266WebServer::CLIENT_MUST_STOP;
-    }
-    return ESP8266WebServer::CLIENT_REQUEST_CAN_CONTINUE;
-  });
-
-  server.addHook([](const String&, const String & url, WiFiClient * client, ESP8266WebServer::ContentTypeFunction) {
-    if (url.startsWith("/dump")) {
-      Serial.printf("The dumper web hook is on the run\n");
-
-      // Here the request is not interpreted, so we cannot for sure
-      // swallow the exact amount matching the full request+content,
-      // hence the tcp connection cannot be handled anymore by the
-      // webserver.
-#ifdef STREAMSEND_API
-      // we are lucky
-      client->sendAll(Serial, 500);
-#else
-      auto last = millis();
-      while ((millis() - last) < 500) {
-        char buf[32];
-        size_t len = client->read((uint8_t*)buf, sizeof(buf));
-        if (len > 0) {
-          Serial.printf("(<%d> chars)", (int)len);
-          Serial.write(buf, len);
-          last = millis();
-        }
-      }
-#endif
-      // Two choices: return MUST STOP and webserver will close it
-      //                       (we already have the example with '/fail' hook)
-      // or                  IS GIVEN and webserver will forget it
-      // trying with IS GIVEN and storing it on a dumb WiFiClient.
-      // check the client connection: it should not immediately be closed
-      // (make another '/dump' one to close the first)
-      Serial.printf("\nTelling server to forget this connection\n");
-      static WiFiClient forgetme = *client; // stop previous one if present and transfer client refcounter
-      return ESP8266WebServer::CLIENT_IS_GIVEN;
-    }
-    return ESP8266WebServer::CLIENT_REQUEST_CAN_CONTINUE;
-  });
-
-  // Hook examples
-  /////////////////////////////////////////////////////////
-
   server.begin();
   
   pinMode(LED_BUILTIN, OUTPUT);     // Initialize the LED_BUILTIN pin as an output
@@ -193,7 +157,11 @@ void setup() {
 
 void loop() {
   ArduinoOTA.handle();
-
   server.handleClient();
+  hp.sync();
   MDNS.update();
+
+  heatpumpSettings settings = hp.getSettings();
+  current_temp = settings.temperature;
+  
 }
